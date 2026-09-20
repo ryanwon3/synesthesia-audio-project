@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090a0b" />
+    <title>Spotify Synesthesia</title>
+  </head>
+  <body>
+    <canvas id="painting" aria-label="Live synesthesia visualization"></canvas>
+    <header class="app-bar">
+      <div class="identity">
+        <span class="wordmark">Spotify Synesthesia</span>
+        <span id="connection-status" class="connection-status" data-state="connecting">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-label">Finding audio</span>
+        </span>
+      </div>
+      <nav class="tools" aria-label="Visualizer controls">
+        <button id="spotify-connect" class="icon-button spotify-connect" type="button" aria-label="Connect Spotify" title="Connect Spotify">
+          <i data-lucide="link" aria-hidden="true"></i>
+        </button>
+        <button id="debug-toggle" class="icon-button" type="button" aria-label="Toggle diagnostics" title="Diagnostics">
+          <i data-lucide="bug" aria-hidden="true"></i>
+        </button>
+        <button id="fullscreen-toggle" class="icon-button" type="button" aria-label="Toggle fullscreen" title="Fullscreen">
+          <i data-lucide="maximize" aria-hidden="true"></i>
+        </button>
+        <button id="calibration-toggle" class="icon-button" type="button" aria-label="Open calibration" title="Calibration">
+          <i data-lucide="sliders-horizontal" aria-hidden="true"></i>
+        </button>
+      </nav>
+    </header>
+    <aside id="calibration-panel" class="calibration-panel" aria-hidden="true"></aside>
+    <section id="debug-overlay" class="debug-overlay" aria-hidden="true"></section>
+    <dialog id="spotify-dialog" class="spotify-dialog">
+      <form id="spotify-form" method="dialog">
+        <header>
+          <div><span class="panel-kicker">SPOTIFY</span><h1>Connect account</h1></div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Close Spotify setup" title="Close">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </header>
+        <label for="spotify-client-id">Client ID</label>
+        <input id="spotify-client-id" name="clientId" type="text" maxlength="256" autocomplete="off" required />
+        <p id="spotify-form-status" class="form-status" aria-live="polite"></p>
+        <footer>
+          <button class="command-button" type="submit"><i data-lucide="link" aria-hidden="true"></i>Save and connect</button>
+        </footer>
+      </form>
+    </dialog>
+    <div id="webgl-error" class="webgl-error" hidden>
+      <strong>WebGL is unavailable</strong>
+      <span>This visualizer needs hardware-accelerated graphics.</span>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "name": "My Synesthesia",
+  "pitchColors": {
+    "C": "#E85D4A",
+    "CSharp": "#F09A48",
+    "D": "#E8CF57",
+    "DSharp": "#8DCB62",
+    "E": "#3EBB88",
+    "F": "#31B9B7",
+    "FSharp": "#4A9EDA",
+    "G": "#5974D8",
+    "GSharp": "#8B63CE",
+    "A": "#BF5DB3",
+    "ASharp": "#DB5781",
+    "B": "#E66B58"
+  },
+  "response": {
+    "bassDeformation": 0.72,
+    "midStructure": 0.58,
+    "trebleParticles": 0.64,
+    "transientImpulse": 0.7,
+    "persistence": 0.84,
+    "movement": 0.48,
+    "sharpness": 0.46,
+    "softness": 0.68,
+    "depth": 0.62,
+    "smoothing": 0.72,
+    "attackMs": 45,
+    "releaseMs": 420
+  }
+}

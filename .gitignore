@@ -1,0 +1,39 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+secrets.json
+*.pfx
+*.key
+
+# .NET
+**/bin/
+**/obj/
+.packages/
+TestResults/
+*.user
+*.suo
+
+# Frontend and local toolchain
+node_modules/
+dist/
+.vite/
+.tools/
+
+# Local application data
+data/*
+!data/README.md
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Editors and operating system
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

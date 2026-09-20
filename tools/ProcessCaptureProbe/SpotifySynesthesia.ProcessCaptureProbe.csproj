@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SpotifySynesthesia.ProcessCaptureProbe</RootNamespace>
+    <AssemblyName>SpotifySynesthesia.ProcessCaptureProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\audio-engine\src\SpotifySynesthesia.AudioEngine\SpotifySynesthesia.AudioEngine.csproj" />
+  </ItemGroup>
+</Project>

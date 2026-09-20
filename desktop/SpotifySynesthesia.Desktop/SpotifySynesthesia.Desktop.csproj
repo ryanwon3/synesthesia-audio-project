@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SpotifySynesthesia.Desktop</RootNamespace>
+    <AssemblyName>SpotifySynesthesia.Desktop</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\audio-engine\src\SpotifySynesthesia.AudioEngine\SpotifySynesthesia.AudioEngine.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\..\visualizer\dist\index.html')">
+    <Content Include="..\..\visualizer\dist\**\*">
+      <Link>visualizer\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <Target Name="ValidateVisualizerAssets" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('..\..\visualizer\dist\index.html')"
+           Text="Visualizer assets are missing. Run npm run build in visualizer before building the desktop app." />
+  </Target>
+</Project>

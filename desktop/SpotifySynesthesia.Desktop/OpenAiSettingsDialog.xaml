@@ -1,0 +1,88 @@
+<Window x:Class="SpotifySynesthesia.Desktop.OpenAiSettingsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI lyrics analysis"
+        Width="440"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#161819">
+  <Grid Margin="22">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <TextBlock Foreground="#F4F1EB"
+               FontFamily="Segoe UI Semibold"
+               FontSize="19"
+               Text="AI lyrics analysis" />
+    <TextBlock Grid.Row="1"
+               Margin="0,8,0,18"
+               Foreground="#AAA69F"
+               FontFamily="Segoe UI"
+               FontSize="12"
+               Text="Matched lyrics and song context are sent to OpenAI for abstract mood analysis. This uses API credits. Your key stays protected on this Windows account; leave it blank to keep the saved key."
+               TextWrapping="Wrap" />
+    <StackPanel Grid.Row="2">
+      <TextBlock Margin="0,0,0,7"
+                 Foreground="#C8C4BC"
+                 FontFamily="Segoe UI"
+                 FontSize="12"
+                 Text="OpenAI API key" />
+      <PasswordBox x:Name="ApiKeyBox"
+                   Height="38"
+                   Padding="9,7"
+                   BorderBrush="#484B4C"
+                   Background="#27292A"
+                   Foreground="#F3F0E9"
+                   MaxLength="512" />
+      <TextBlock x:Name="ValidationMessage"
+                 MinHeight="18"
+                 Margin="0,7,0,0"
+                 Foreground="#D8AB5A"
+                 FontFamily="Segoe UI"
+                 FontSize="11" />
+      <CheckBox x:Name="AutomaticBox" Foreground="#F4F1EB" Margin="0,8,0,12"
+                Content="Analyze automatically after 10 seconds of playback" />
+      <TextBlock Text="Analysis model" Foreground="#C8C4BC" Margin="0,0,0,6" />
+      <ComboBox x:Name="ModelBox" Height="30" SelectedIndex="0">
+        <ComboBoxItem Content="gpt-5-mini" />
+        <ComboBoxItem Content="gpt-5" />
+      </ComboBox>
+      <TextBlock Text="Results are cached. Replay does not request another analysis. Songs without matching lyrics use audio and tags."
+                 TextWrapping="Wrap" Foreground="#AAA69F" Margin="0,10,0,0" />
+    </StackPanel>
+    <Grid Grid.Row="4" Margin="0,18,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <Button x:Name="RemoveButton"
+              MinWidth="76"
+              Height="34"
+              Padding="12,5"
+              Click="HandleRemove"
+              Content="Remove" />
+      <Button Grid.Column="2"
+              MinWidth="76"
+              Height="34"
+              Margin="0,0,8,0"
+              Padding="12,5"
+              IsCancel="True"
+              Content="Cancel" />
+      <Button Grid.Column="3"
+              MinWidth="86"
+              Height="34"
+              Padding="12,5"
+              IsDefault="True"
+              Click="HandleSave"
+              Content="Save" />
+    </Grid>
+  </Grid>
+</Window>

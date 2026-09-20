@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SpotifySynesthesia.AudioEngine.Host</RootNamespace>
+    <AssemblyName>SpotifySynesthesia.AudioEngine.Host</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SpotifySynesthesia.AudioEngine\SpotifySynesthesia.AudioEngine.csproj" />
+  </ItemGroup>
+</Project>

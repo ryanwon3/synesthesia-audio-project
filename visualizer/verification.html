@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synesthesia · visual verification</title>
+<style>body{margin:0;background:#050608;color:#eee;font:14px system-ui}canvas{width:100vw;height:100vh;display:block}nav{position:fixed;top:16px;left:16px;background:#111c;padding:15px;border-radius:12px}button,select{margin:5px;padding:9px;background:#292c30;color:#eee;border:1px solid #777;border-radius:6px}output{display:block;margin-top:8px}</style></head>
+<body><canvas id="preview" aria-label="Synthetic visual verification"></canvas><nav><strong>Test signals — no Spotify or paid API requests</strong><br>
+<button data-case="sad">Sad · bass pulses</button><button data-case="dreamy">Dreamy · mids</button><button data-case="tense">Tense · treble</button><button data-case="silence">Silence</button>
+<label>Colors <select id="mode"><option value="mood">Mood palette</option><option value="personal">Personal pitch colors</option></select></label><output id="status"></output></nav>
+<script type="module" src="/src/verification/visualPreview.ts"></script></body></html>
