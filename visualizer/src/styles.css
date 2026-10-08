@@ -11,6 +11,11 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute always wins over author display rules. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   width: 100%;
@@ -133,6 +138,48 @@ input:focus-visible {
 
 .spotify-connect[data-state="valid"] {
   color: #6fd6a8;
+}
+
+.text-button {
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 6px;
+  color: #e8e4dd;
+  background: rgb(255 255 255 / 4%);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.text-button[data-state="paired"] {
+  color: #6fd6a8;
+}
+
+.text-button[data-state="unavailable"] {
+  color: #e9b45c;
+}
+
+.companion-state {
+  margin: 0;
+  color: #f3f0e9;
+  font-size: 13px;
+}
+
+.companion-help {
+  margin: 0;
+  color: #aaa69f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.spotify-dialog footer .command-button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .spotify-connect[data-state="reauthorizationRequired"],
@@ -345,6 +392,12 @@ input:focus-visible {
   background: #111213;
 }
 
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .command-button {
   display: inline-flex;
   min-height: 38px;
@@ -467,6 +520,36 @@ input:focus-visible {
   color: #aaa69f;
 }
 
+.hosted-notice {
+  position: fixed;
+  z-index: 12;
+  top: 74px;
+  left: 18px;
+  max-width: min(560px, calc(100vw - 36px));
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid rgb(214 168 76 / 35%);
+  border-radius: 6px;
+  color: #dbd7d0;
+  background: rgb(11 12 13 / 88%);
+  backdrop-filter: blur(15px);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.hosted-notice strong {
+  color: #f0c765;
+  font-weight: 620;
+}
+
+.is-hosted .tools {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 @media (max-width: 560px) {
   .app-bar {
     min-height: 58px;
@@ -492,6 +575,11 @@ input:focus-visible {
     height: 34px;
   }
 
+  .text-button {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
   .panel-header {
     padding-top: 68px;
   }
@@ -510,6 +598,31 @@ input:focus-visible {
     transition: none;
   }
 }
+
+@media (max-width: 560px) {
+  .is-hosted .app-bar {
+    flex-wrap: wrap;
+  }
+
+  .is-hosted .tools {
+    flex: 1 1 100%;
+  }
+
+  .is-hosted .hosted-notice {
+    top: auto;
+    bottom: 10px;
+    left: 10px;
+    max-width: calc(100vw - 20px);
+    font-size: 11px;
+  }
+
+  .is-hosted .panel-header {
+    padding-top: 128px;
+  }
+}
 :root .mood-previews { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 14px 0; }
 :root .mood-previews div { padding: 8px; border-radius: 5px; font-size: 11px; color: white; text-shadow: 0 1px 3px black; }
 :root select { padding: 8px; max-width: 100%; background: #252729; color: #eee; border: 1px solid #555; border-radius: 5px; }
+.hosted-account { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.hosted-account-status { flex-basis: 100%; color: #bfc4ca; font-size: 11px; }
+.palette-chooser { font-size: 12px; }

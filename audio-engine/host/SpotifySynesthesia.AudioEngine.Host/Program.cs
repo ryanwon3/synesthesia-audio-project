@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using SpotifySynesthesia.AudioEngine.Capture;
 using SpotifySynesthesia.AudioEngine.Server;
@@ -10,9 +9,12 @@ internal static class Program
     public static async Task<int> Main(string[] args)
     {
         HostArguments options;
+        AudioFrameWebSocketServerOptions serverOptions;
         try
         {
             options = HostArguments.Parse(args);
+            // The options policy validates each exact origin; authentication stays required.
+            serverOptions = new(options.Port, allowedBrowserOrigins: options.AllowedOrigins);
         }
         catch (ArgumentException exception)
         {
@@ -28,12 +30,13 @@ internal static class Program
             shutdown.Cancel();
         };
 
-        AudioFrameWebSocketServerOptions serverOptions = new(options.Port);
         await using AudioEngineRuntime runtime = new(serverOptions);
         await runtime.StartServerAsync(shutdown.Token);
 
         Console.WriteLine($"AudioFrame server: {serverOptions.WebSocketUri}");
         Console.WriteLine($"Health endpoint: {serverOptions.HealthUri}");
+        Console.WriteLine(
+            "This diagnostic host cannot issue pairing codes. Use the Windows app to pair a browser.");
         Console.WriteLine(options.ProcessId is int processId
             ? $"Target PID: {processId}"
             : $"Waiting for process: {options.ProcessName}");
@@ -47,6 +50,11 @@ internal static class Program
         {
             return 0;
         }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Capture stopped and will not restart: {exception.Message}");
+            return 1;
+        }
     }
 
     private static async Task<int> RunMonitoredCaptureAsync(
@@ -54,89 +62,85 @@ internal static class Program
         HostArguments options,
         CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        bool captureStarted = false;
+        ProcessCaptureMonitor monitor = new(
+            runtime,
+            () => ResolveProcessId(options),
+            ProcessTargetLocator.IsAlive);
+        monitor.StatusChanged += status =>
         {
-            int? processId = options.ProcessId ??
-                ProcessTargetLocator.FindOldestExactMatch(options.ProcessName)?.ProcessId;
-            if (processId is null)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-                continue;
-            }
+            captureStarted |= status.Kind == ProcessCaptureMonitorEventKind.CaptureStarted;
+            WriteStatus(runtime, status);
+        };
 
-            try
-            {
-                await runtime.StartCaptureAsync(processId.Value, cancellationToken);
-                Console.WriteLine($"Capturing process tree rooted at PID {processId.Value}.");
-                await MonitorSessionAsync(runtime, processId.Value, cancellationToken);
-                await runtime.StopCaptureAsync(CancellationToken.None);
+        await monitor.RunAsync(waitForTargetRestart: !options.ProcessId.HasValue, cancellationToken);
 
-                if (options.ProcessId.HasValue)
-                {
-                    return 0;
-                }
-
-                Console.WriteLine("Target process exited; waiting for it to restart.");
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return 0;
-            }
-            catch (Exception exception)
-            {
-                Console.Error.WriteLine($"Capture failed for PID {processId.Value}: {exception.Message}");
-
-                if (options.ProcessId.HasValue)
-                {
-                    return 1;
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
+        if (options.ProcessId is int processId && !captureStarted)
+        {
+            Console.Error.WriteLine($"Target PID {processId} is not running.");
+            return 1;
         }
 
         return 0;
     }
 
-    private static async Task MonitorSessionAsync(
-        AudioEngineRuntime runtime,
-        int processId,
-        CancellationToken cancellationToken)
+    private static int? ResolveProcessId(HostArguments options)
     {
-        while (!cancellationToken.IsCancellationRequested && IsProcessAlive(processId))
+        if (options.ProcessId is int processId)
         {
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            AudioEngineRuntimeSnapshot snapshot = runtime.GetSnapshot();
-            Console.WriteLine(
-                $"state={snapshot.CaptureState} clients={snapshot.ConnectedClients} " +
-                $"frame={snapshot.LatestSequence} dsp={snapshot.CaptureToDspMilliseconds:F2}ms");
+            return ProcessTargetLocator.IsAlive(processId) ? processId : null;
         }
+
+        return ProcessTargetLocator.FindOldestExactMatch(options.ProcessName)?.ProcessId;
     }
 
-    private static bool IsProcessAlive(int processId)
+    // Raised from the monitor task, never from the capture thread.
+    private static void WriteStatus(AudioEngineRuntime runtime, ProcessCaptureMonitorEvent status)
     {
-        try
+        switch (status.Kind)
         {
-            using Process process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
+            case ProcessCaptureMonitorEventKind.WaitingForTarget:
+                Console.WriteLine("Waiting for the target process to start.");
+                break;
+            case ProcessCaptureMonitorEventKind.CaptureStarted:
+                Console.WriteLine($"Capturing process tree rooted at PID {status.ProcessId}.");
+                break;
+            case ProcessCaptureMonitorEventKind.Heartbeat:
+                AudioEngineRuntimeSnapshot snapshot = runtime.GetSnapshot();
+                Console.WriteLine(
+                    $"state={snapshot.CaptureState} clients={snapshot.ConnectedClients} " +
+                    $"frame={snapshot.LatestSequence} dsp={snapshot.CaptureToDspMilliseconds:F2}ms");
+                break;
+            case ProcessCaptureMonitorEventKind.TargetExited:
+                Console.WriteLine($"Target process {status.ProcessId} exited.");
+                break;
+            case ProcessCaptureMonitorEventKind.CaptureStopped when status.Error is not null:
+                Console.Error.WriteLine($"Capture stopped for PID {status.ProcessId}: {status.Error.Message}");
+                break;
+            case ProcessCaptureMonitorEventKind.CaptureStopped:
+                Console.WriteLine($"Capture stopped for PID {status.ProcessId}.");
+                break;
+            case ProcessCaptureMonitorEventKind.Restarting:
+                Console.WriteLine($"Restarting capture for PID {status.ProcessId}.");
+                break;
         }
     }
 }
 
-internal sealed record HostArguments(int? ProcessId, string ProcessName, int Port)
+internal sealed record HostArguments(int? ProcessId, string ProcessName, int Port, IReadOnlyList<string> AllowedOrigins)
 {
+    private const int MaxAllowedOrigins = 8;
+
     public const string Usage =
-        "Usage: AudioEngine.Host [--pid <id> | --process-name <name>] [--port <1024-65535>]";
+        "Usage: AudioEngine.Host [--pid <id> | --process-name <name>] [--port <1024-65535>] " +
+        "[--allowed-origin <exact-origin>]...";
 
     public static HostArguments Parse(string[] args)
     {
         int? processId = null;
         string processName = "Spotify";
         int port = 8765;
+        List<string> allowedOrigins = [];
 
         for (int index = 0; index < args.Length; index++)
         {
@@ -162,12 +166,20 @@ internal sealed record HostArguments(int? ProcessId, string ProcessName, int Por
                     }
 
                     break;
+                case "--allowed-origin":
+                    if (allowedOrigins.Count >= MaxAllowedOrigins)
+                    {
+                        throw new ArgumentException($"--allowed-origin can be given at most {MaxAllowedOrigins} times.");
+                    }
+
+                    allowedOrigins.Add(value);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument '{argument}'.");
             }
         }
 
-        return new HostArguments(processId, processName, port);
+        return new HostArguments(processId, processName, port, allowedOrigins);
     }
 
     private static int ParseInt(string value, string argument)

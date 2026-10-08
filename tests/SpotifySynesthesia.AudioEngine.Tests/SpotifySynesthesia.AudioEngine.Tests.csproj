@@ -15,4 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\audio-engine\src\SpotifySynesthesia.AudioEngine\SpotifySynesthesia.AudioEngine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\desktop\SpotifySynesthesia.Desktop\CompanionSettings.cs" Link="Desktop\CompanionSettings.cs" />
+  </ItemGroup>
 </Project>

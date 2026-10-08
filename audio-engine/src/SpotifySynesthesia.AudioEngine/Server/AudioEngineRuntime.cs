@@ -4,7 +4,7 @@ using SpotifySynesthesia.AudioEngine.Capture;
 
 namespace SpotifySynesthesia.AudioEngine.Server;
 
-public sealed class AudioEngineRuntime : IAsyncDisposable
+public sealed class AudioEngineRuntime : IAudioCaptureSession, IAsyncDisposable
 {
     private readonly ProcessLoopbackCapture _capture;
     private readonly RealTimeAudioAnalyzer _analyzer;
@@ -23,6 +23,13 @@ public sealed class AudioEngineRuntime : IAsyncDisposable
     }
 
     public event Action<AudioFrame>? FrameProduced;
+
+    // Forwards directly to the capture; handlers run on the capture thread.
+    public event Action<ProcessLoopbackCaptureStopped>? CaptureStopped
+    {
+        add => _capture.CaptureStopped += value;
+        remove => _capture.CaptureStopped -= value;
+    }
 
     public ProcessLoopbackCaptureState CaptureState => _capture.State;
 

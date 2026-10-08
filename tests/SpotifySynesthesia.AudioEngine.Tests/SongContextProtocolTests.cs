@@ -18,7 +18,9 @@ public sealed class SongContextProtocolTests
     public async Task ReplaysLatestSnapshotAcceptsTypedCommandAndLeavesAudioPublishingIndependent()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        AudioFrameWebSocketServerOptions options = new(GetAvailablePort());
+        AudioFrameWebSocketServerOptions options = new(
+            GetAvailablePort(),
+            nativeDiagnosticPolicy: NativeDiagnosticPolicy.AllowUnauthenticatedLoopbackDiagnostics);
         TaskCompletionSource<SongContextCommand> receivedCommand = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await using AudioFrameWebSocketServer server = new(options);
@@ -107,7 +109,9 @@ public sealed class SongContextProtocolTests
     public async Task ReconnectedClientReceivesTheLatestLastFmSnapshot()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        AudioFrameWebSocketServerOptions options = new(GetAvailablePort());
+        AudioFrameWebSocketServerOptions options = new(
+            GetAvailablePort(),
+            nativeDiagnosticPolicy: NativeDiagnosticPolicy.AllowUnauthenticatedLoopbackDiagnostics);
         await using AudioFrameWebSocketServer server = new(options);
         await server.StartAsync(cancellationToken);
         server.PublishSongContext(CreateSnapshot());

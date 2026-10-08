@@ -10,9 +10,47 @@
         WindowStartupLocation="CenterScreen"
         Background="#070809"
         Loaded="HandleLoaded">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Padding" Value="10,3" />
+    </Style>
+    <Style x:Key="BarText" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#AAA69F" />
+      <Setter Property="FontFamily" Value="Segoe UI" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </Window.Resources>
   <Grid>
-    <wv2:WebView2 x:Name="Visualizer" DefaultBackgroundColor="#070809" />
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <Border Background="#111314" BorderBrush="#323536" BorderThickness="0,0,0,1" Padding="10,6">
+      <StackPanel>
+        <WrapPanel>
+          <TextBlock x:Name="CaptureStatusText" Style="{StaticResource BarText}" Margin="0,0,14,0"
+                     Foreground="#F4F1EB" Text="Starting" />
+          <WrapPanel x:Name="CompanionControls" IsEnabled="False">
+            <Button Content="New pairing code" Click="HandleRotatePairingCode" />
+            <TextBox x:Name="PairingCodeBox" Width="210" Margin="0,0,6,0" IsReadOnly="True"
+                     Visibility="Collapsed" FontFamily="Cascadia Mono, Consolas" VerticalContentAlignment="Center" />
+            <Button x:Name="CopyCodeButton" Content="Copy code" IsEnabled="False" Click="HandleCopyPairingCode" />
+            <TextBlock x:Name="PairingExpiryText" Style="{StaticResource BarText}" Margin="0,0,14,0" />
+            <Button Content="Disconnect browsers" Click="HandleDisconnectBrowsers" />
+            <Button x:Name="OpenHostedButton" Content="Open hosted visualizer" IsEnabled="False"
+                    Click="HandleOpenHosted" />
+            <Button Content="Built-in visualizer" Click="HandleOpenBundled" />
+          </WrapPanel>
+        </WrapPanel>
+        <TextBlock x:Name="HostedOriginText" Style="{StaticResource BarText}" Margin="0,5,0,0" TextWrapping="Wrap" />
+        <TextBlock x:Name="CompanionStatusText" Style="{StaticResource BarText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+    <wv2:WebView2 x:Name="Visualizer" Grid.Row="1" DefaultBackgroundColor="#070809" />
     <Border x:Name="StartupStatus"
+            Grid.Row="1"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Padding="24,18"

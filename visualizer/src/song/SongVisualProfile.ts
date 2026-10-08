@@ -1,17 +1,7 @@
 import { extrapolateProgressMs, type SongContextSnapshot } from "./SongContext";
+import { effects, moods, type Mood, type MoodTraits, type SongVisualProfile } from "../../../shared/SongTraits";
 
-export const moods = ["neutral", "sad", "dreamy", "joyful", "tense", "calm", "dark"] as const;
-export type Mood = typeof moods[number];
-export const effects = ["ripples", "ribbons", "clouds", "sparks", "fragments"] as const;
-export type Effect = typeof effects[number];
-export interface MoodTraits {
-  mood: Mood; energy: number; tension: number; softness: number; imagery: string;
-  bassEffect: Effect; midEffect: Effect; trebleEffect: Effect;
-}
-export interface SongVisualProfile {
-  wholeSong: MoodTraits;
-  sections: { startMs: number; endMs: number; traits: MoodTraits }[];
-}
+export { effects, moods, type Effect, type Mood, type MoodTraits, type SongVisualProfile } from "../../../shared/SongTraits";
 export interface LyricsAnalysisState {
   status: string; source: string | null; timed: boolean; cached: boolean; error: string | null;
   profile: SongVisualProfile | null;
@@ -33,6 +23,7 @@ export const moodRules: Record<Mood, { tags: string[]; colors: string[]; traits:
 };
 
 export function tagTraits(song?: SongContextSnapshot): MoodTraits {
+  if (song?.stale) return { ...neutralTraits };
   const scores = new Map<Mood, number>();
   for (const [tags, strength] of [[song?.lastFm?.trackTags, 1], [song?.lastFm?.artistTags, 0.3]] as const) {
     for (const tag of tags ?? []) {
@@ -48,6 +39,7 @@ export function tagTraits(song?: SongContextSnapshot): MoodTraits {
 }
 
 export function songTraits(song?: SongContextSnapshot, now = Date.now()): MoodTraits {
+  if (song?.stale) return { ...neutralTraits };
   const overrides = song?.activeProfile?.reserved.personalOverrides as { visualProfile?: unknown } | null;
   const analysis = isVisualProfile(overrides?.visualProfile) ? overrides.visualProfile : song?.lyricsAnalysis?.profile;
   if (!analysis || !isVisualProfile(analysis)) return tagTraits(song);

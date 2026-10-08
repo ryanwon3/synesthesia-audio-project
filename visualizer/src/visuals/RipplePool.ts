@@ -16,4 +16,8 @@ export class RipplePool {
       this.armed = false; this.cooldown = 0.24;
     }
   }
+  public clear(): void {
+    for (const ring of this.rings) { ring.x = ring.y = ring.strength = 0; ring.age = 10; }
+    this.armed = true; this.cooldown = 0; this.cursor = 0;
+  }
 }

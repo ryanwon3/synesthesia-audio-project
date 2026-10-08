@@ -39,6 +39,26 @@ public static class ProcessTargetLocator
             .ThenBy(candidate => candidate.ProcessId)
             .FirstOrDefault();
     }
+
+    public static bool IsAlive(int processId)
+    {
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // The process is gone or cannot be inspected.
+            return false;
+        }
+    }
 }
 
 public sealed record ProcessTarget(

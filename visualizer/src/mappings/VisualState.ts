@@ -1,3 +1,6 @@
+import type { SpatialVisualState } from "./SpatialVisualState";
+import type { SongAtmosphere } from "../song/SongAtmosphere";
+
 export type RgbColor = readonly [red: number, green: number, blue: number];
 export interface VisualLayer {
   color: RgbColor;
@@ -9,6 +12,8 @@ export interface VisualLayer {
 const quietLayer = (): VisualLayer => ({ color: [0.2, 0.3, 0.4], energy: 0, attack: 0, softness: 0.6, effects: [1, 0, 0, 0, 0] });
 
 export interface VisualState {
+  atmosphere?: SongAtmosphere;
+  spatial?: SpatialVisualState;
   layers: [VisualLayer, VisualLayer, VisualLayer];
   primaryColor: RgbColor;
   secondaryColor: RgbColor;

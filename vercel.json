@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build:hosted",
+  "installCommand": "npm ci --ignore-scripts && npm --prefix visualizer ci --ignore-scripts",
+  "outputDirectory": "visualizer/dist-hosted",
+  "regions": ["iad1"],
+  "functions": { "api/**/*.ts": { "maxDuration": 30 } },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "headers": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:8765; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+      },
+      "continue": true
+    },
+    { "src": "/assets/(.*)", "headers": { "Cache-Control": "public, max-age=31536000, immutable" }, "continue": true },
+    { "src": "/(?:[^.]*|index[.]html)", "headers": { "Cache-Control": "no-store" }, "continue": true },
+    { "src": "/.*[.](?:map|json)", "status": 404 },
+    { "handle": "filesystem" },
+    { "src": "/api(?:/.*)?", "status": 404 },
+    { "src": "/assets/.*", "status": 404 },
+    { "src": "/.*", "dest": "/index.html" }
+  ]
+}

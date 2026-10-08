@@ -90,14 +90,15 @@ public sealed class ProcessLoopbackCapture : IProcessLoopbackCapture
                 _captureClient = _audioClient.AudioCaptureClient;
                 _sampleReadyEvent = new AutoResetEvent(initialState: false);
                 _audioClient.SetEventHandle(_sampleReadyEvent.SafeWaitHandle.DangerousGetHandle());
-                _captureCancellation = new CancellationTokenSource();
-                _captureTask = Task.Factory.StartNew(
-                    CaptureLoop,
-                    _captureCancellation.Token,
-                    TaskCreationOptions.LongRunning,
-                    TaskScheduler.Default);
-
-                _audioClient.Start();
+                CancellationTokenSource captureCancellation = new();
+                _captureCancellation = captureCancellation;
+                CaptureSessionLifecycle.StartAudioThenWorker(
+                    _audioClient.Start,
+                    () => _captureTask = Task.Factory.StartNew(
+                        CaptureLoop,
+                        captureCancellation.Token,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default));
                 SetState(ProcessLoopbackCaptureState.Capturing);
             }
             catch (Exception exception)
@@ -264,17 +265,10 @@ public sealed class ProcessLoopbackCapture : IProcessLoopbackCapture
             await _captureTask.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        try
-        {
-            _audioClient?.Stop();
-        }
-        catch (COMException exception) when (_loopError is null)
-        {
-            _loopError = exception;
-        }
-
-        Exception? error = _loopError;
-        CleanupResources();
+        Exception? error = CaptureSessionLifecycle.StopAudioAndCleanup(
+            () => _audioClient?.Stop(),
+            CleanupResources,
+            _loopError);
 
         if (error is null)
         {

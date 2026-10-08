@@ -9,8 +9,12 @@ analytics dashboard.
 
 ## Architecture boundaries
 
-- `audio-engine` owns Windows process-loopback capture, real-time DSP, external
-  service integrations, profile persistence, and the localhost WebSocket server.
+- `audio-engine` owns Windows process-loopback capture, real-time DSP, local
+  optional integrations and caches, profile persistence, and the localhost
+  WebSocket server. It remains the offline Windows companion.
+- `cloud` and root `api` own the approved hosted service lane: Spotify identity,
+  optional background enrichment, server sessions, durable service caches, and
+  centrally configured provider credentials. Raw captured audio is not uploaded.
 - `desktop` owns the WPF/WebView2 shell and application lifecycle composition.
 - `visualizer` owns the Vite, TypeScript, Three.js, WebGL, and calibration UI.
 - `tools/TestTonePlayer` is a diagnostic audio source. It must stay independent
@@ -18,9 +22,10 @@ analytics dashboard.
 - `profiles` contains user-owned synesthesia configuration in a later milestone.
 - `data` contains local caches and databases and is never committed.
 
-The WPF desktop shell hosts the production Vite bundle through WebView2. Browser
-rendering code remains independent from WPF and consumes only the documented
-localhost protocol.
+The WPF desktop shell hosts the offline Vite bundle through WebView2. The hosted
+version serves the same frontend on Vercel and pairs with the Windows companion
+for local capture. Browser rendering code remains independent from WPF and
+consumes only documented normalized audio/context and connection protocols.
 
 ## Execution lanes
 
@@ -40,9 +45,13 @@ must never run on the capture or DSP callback thread.
 - Spotify identity and Spotify process capture are separate subsystems.
 - All external services are optional enrichment. Local audio must continue when
   they fail or the network is unavailable.
-- Secrets stay in the backend's protected local store and never enter frontend
-  bundles, logs, fixtures, diagnostics, or committed files. A Spotify client ID
-  is non-secret configuration and is entered through the local setup dialog.
+- Shared provider secrets stay in the hosted backend's protected server-only
+  configuration; existing optional desktop credentials remain in the protected
+  local store. Neither enters frontend bundles, logs, fixtures, diagnostics, or
+  committed files. A Spotify client ID is non-secret configuration. The hosted
+  service is configured by its owner; end users sign in rather than enter keys.
+- Companion credentials are short-lived, scoped to exact allowed origins, and
+  kept in browser memory. Authenticate before sending any audio or song context.
 - Prefer strongly typed records and small interfaces at subsystem boundaries.
 - Keep configuration out of hard-coded rendering and DSP logic.
 

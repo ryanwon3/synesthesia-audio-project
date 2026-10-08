@@ -1,4 +1,10 @@
+import type { LastFmTag } from "../../../shared/CloudSongContext";
+import type { SpotifyAlbumIdentity, SpotifyArtistIdentity } from "../../../shared/SongIdentity";
 import type { LyricsAnalysisState } from "./SongVisualProfile";
+
+export type { LastFmTag } from "../../../shared/CloudSongContext";
+export type { CurrentTrack, SpotifyAlbumIdentity, SpotifyArtistIdentity } from "../../../shared/SongIdentity";
+import type { CurrentTrack } from "../../../shared/SongIdentity";
 
 export type SpotifyMetadataStatus =
   | "notConfigured"
@@ -49,11 +55,6 @@ export type LastFmErrorCategory =
   | "unexpectedResponse"
   | "persistence";
 
-export interface LastFmTag {
-  name: string;
-  weight: number | null;
-}
-
 export interface LastFmContextState {
   status: LastFmStatus;
   cacheSource: LastFmCacheSource;
@@ -67,33 +68,6 @@ export interface LastFmContextState {
   retrievedAtUtc: string | null;
   errorCategory: LastFmErrorCategory | null;
   nextRetryUtc: string | null;
-}
-
-export interface SpotifyArtistIdentity {
-  spotifyArtistId: string | null;
-  name: string | null;
-}
-
-export interface SpotifyAlbumIdentity {
-  spotifyAlbumId: string | null;
-  name: string | null;
-  artworkUrl: string | null;
-  releaseDate: string | null;
-  releaseDatePrecision: string | null;
-}
-
-export interface CurrentTrack {
-  spotifyTrackId: string;
-  spotifyUri: string | null;
-  isrc: string | null;
-  title: string | null;
-  artists: SpotifyArtistIdentity[];
-  album: SpotifyAlbumIdentity | null;
-  durationMs: number | null;
-  explicit: boolean | null;
-  progressMs: number | null;
-  isPlaying: boolean;
-  observedAtUtc: string;
 }
 
 export interface SongProfile {

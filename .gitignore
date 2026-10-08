@@ -17,10 +17,14 @@ TestResults/
 # Frontend and local toolchain
 node_modules/
 dist/
+dist-hosted/
+deploy/mvp/static/
 .vite/
 .tools/
+.vercel/
 
 # Local application data
+outputs/
 data/*
 !data/README.md
 *.db

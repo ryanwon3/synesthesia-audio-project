@@ -1,7 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synesthesia · visual verification</title>
 <style>body{margin:0;background:#050608;color:#eee;font:14px system-ui}canvas{width:100vw;height:100vh;display:block}nav{position:fixed;top:16px;left:16px;background:#111c;padding:15px;border-radius:12px}button,select{margin:5px;padding:9px;background:#292c30;color:#eee;border:1px solid #777;border-radius:6px}output{display:block;margin-top:8px}</style></head>
-<body><canvas id="preview" aria-label="Synthetic visual verification"></canvas><nav><strong>Test signals — no Spotify or paid API requests</strong><br>
-<button data-case="sad">Sad · bass pulses</button><button data-case="dreamy">Dreamy · mids</button><button data-case="tense">Tense · treble</button><button data-case="silence">Silence</button>
-<label>Colors <select id="mode"><option value="mood">Mood palette</option><option value="personal">Personal pitch colors</option></select></label><output id="status"></output></nav>
+<body><canvas id="preview" aria-label="Synthetic visual verification"></canvas><nav><strong>Synthetic prototype — no Spotify, saved profile, or API requests</strong><br>
+<button data-case="bass">Low attacks → rain</button><button data-case="mids">Sustained mids → waves</button><button data-case="harmonic">Harmonic changes → glass · melodic approximation</button><br>
+<button data-case="treble">Treble only</button><button data-case="mix">All families</button><button data-case="stereo">Stereo</button><button data-case="song-switch">Song switch</button><button data-case="silence">Silence</button><button data-case="stale">Stale</button><button data-case="malformed">Malformed</button><br>
+<label>Renderer <select id="renderer"><option value="spatial">3D prototype</option><option value="painting">Painting comparison</option></select></label>
+<label>Quality <select id="quality"><option value="normal">Normal</option><option value="low">Low</option></select></label>
+<label>Theme <select id="preset"><option value="bronze-rain-glass">Bronze waves · rain · glass</option><option value="personal">Synthetic pitch colors</option></select></label>
+<label>Colors <select id="mode"><option value="personal">Synthetic personal palette</option><option value="mood">Mood palette</option></select></label><output id="status"></output></nav>
 <script type="module" src="/src/verification/visualPreview.ts"></script></body></html>

@@ -2,9 +2,24 @@
 
 A Windows 11 desktop application that captures Spotify's process audio and turns
 it into a continuous, abstract Three.js painting guided by a personal 12-note
-color profile. The usable local-audio MVP is complete: it runs without accounts,
-API keys, or internet services. Spotify Web API identity is an optional parallel
+color profile. The local-audio core runs without accounts, API keys, or internet
+services. Spotify Web API identity is an optional parallel
 service and the visualization keeps running when it is disconnected.
+
+## Release checkpoint — October 8, 2026
+
+| Area | Current state |
+| --- | --- |
+| Windows desktop / companion | Local capture, DSP, protected pairing, profile transfer and offline renderer are implemented. New hosted pairing and visual acceptance still need user testing. |
+| Hosted visual pilot | [Protected Vercel pilot](https://synesthesia-pilot-compass-8108.vercel.app) is deployed with neutral public defaults, synthetic 3D preview and stronger audio-driven color/effects. Team sign-in may be required. |
+| Hosted Spotify / Last.fm backend | Source and synthetic tests are implemented; backend functions are not deployed. Owner configuration, real database/auth verification and migration approval remain required. |
+
+This is a source checkpoint, not a finished public release. The live static pilot
+does not yet provide hosted Spotify login or Last.fm retrieval. AI enrichment is
+off in the hosted pilot. Real music/GPU/browser acceptance and personal-profile
+export/import/compare are deferred; automated tests do not establish those results.
+See [pilot instructions](docs/mvp-pilot.md), [hosted setup](docs/hosted-setup.md)
+and [spatial verification](docs/spatial-verification.md) for the exact boundaries.
 
 ## Run the app
 
@@ -23,8 +38,8 @@ use the bug button to show diagnostics.
 
 To add current-song identity, use the link button and enter the client ID from a
 personal Spotify developer app. See `docs/spotify-metadata.md` for the exact app,
-redirect, authorization, and playback verification steps. No client secret is
-used or accepted.
+redirect, authorization, and playback verification steps. This desktop PKCE path
+does not use or accept a client secret; the separate hosted backend does.
 
 Last.fm track and artist tags can be enabled from the hidden diagnostics panel.
 Choose `Configure` in its Last.fm section and enter a Last.fm API key in the
@@ -45,6 +60,47 @@ mood gradients (for example blue/purple for sad music), with a distinct shade
 for each pitch in each layer. AI never supplies colors or shader code.
 See `docs/song-aware-visuals.md` for behavior and verification details.
 
+## Secure Windows companion rollout
+
+The protected [minimum pilot](https://synesthesia-pilot-compass-8108.vercel.app)
+is deployed as a neutral **static-only** app with a labeled synthetic 3D preview.
+It is not yet a deployed account/metadata backend; Vercel may require compass
+team sign-in. See [pilot instructions](docs/mvp-pilot.md).
+
+The current source adds authenticated local audio and song-context streams,
+one-use pairing codes, memory-only browser credentials, and a trusted bootstrap
+for the built-in visualizer. Automated checks do not establish real Chrome/Edge
+permission behavior or desktop UI acceptance.
+
+The Windows app can show and copy a new pairing code after an explicit click.
+Use the browser's **Connect Windows companion** dialog to enter it. Codes expire
+after five minutes and work once. **Disconnect browsers** revokes existing
+sessions; **Built-in visualizer** reloads the offline page with its own fresh
+local credential. A reload replaces only that page's session.
+
+An owner may set the nonsecret `SYNESTHESIA_HOSTED_ORIGIN` startup environment
+variable to one exact HTTPS origin, such as `https://app.example`. The example
+is a placeholder, not a deployed site. Paths, credentials, queries, fragments,
+and wildcards are rejected; restart the app after changing it. With no value,
+the companion allows only its built-in origin. The diagnostic Host can accept
+up to eight explicit `--allowed-origin` arguments, but never prints pairing
+codes/tokens or provides a credential-issuance route.
+
+This setting only admits the hosted browser to the local companion. New backend
+source implements centralized server configuration, hosted Spotify login,
+cached Last.fm tags and optional bounded analysis, with account controls wired
+in the hosted build. The updated visual bundle is deployed; the backend handlers
+are **not yet deployed**. Owner configuration, real database/auth verification
+and live acceptance remain release gates; see [hosted setup](docs/hosted-setup.md).
+
+The experimental bronze-wave/rain/glass theme now has stronger color visibility
+and audio/tag-driven haze, shimmer and distortion. Personal pitch colors stay
+default; Mood colors are an explicit session-only choice. Neither tags nor AI
+claim instrument separation, and personal profile migration/tuning remains
+deferred. See [the connection protocol](docs/companion-connection-protocol.md)
+and [verification evidence](docs/mvp-verification.md) for implemented and
+unverified behavior. Do not disable browser security to connect.
+
 ## Prerequisites
 
 - Windows 11 with the WebView2 Runtime (included with normal Windows 11 installs)
@@ -63,7 +119,7 @@ start playback, and run `./Start-SpotifySynesthesia.cmd` (or
 
 ## How the APIs are called
 
-The backend uses .NET `HttpClient` to authorize Spotify with OAuth Authorization
+The offline Windows backend uses .NET `HttpClient` to authorize Spotify with OAuth Authorization
 Code + PKCE, request the `user-read-currently-playing` scope, and deserialize the
 current-track JSON response into typed C# records. It calls Last.fm over HTTPS
 with `method`, `artist`, `track`, `api_key`, and `format=json` query parameters,
@@ -75,7 +131,17 @@ records rather than colors or executable rendering code. The normalized audio
 and song-context records are serialized as JSON and delivered to the TypeScript
 renderer over typed localhost WebSocket endpoints.
 
-## Optional API credentials
+The hosted lane uses Better Auth for server-side Spotify sessions and encrypted
+provider tokens, `pg` for durable PostgreSQL caches/limits, and fixed same-origin
+routes under `api/`. It polls current-song identity, validates Spotify/Last.fm
+results and returns bounded context to the renderer. Local normalized audio
+frames travel directly from the Windows companion to the browser, not through
+Vercel. Optional hosted lyric analysis is manual and disabled by default; it
+requires separately approved paid configuration. Server secrets and lyrics never
+enter browser bundles or returned context. This lane is implemented in source,
+not yet a verified deployed backend.
+
+## Optional desktop API credentials
 
 The core audio visualizer works without any API account. For song identity,
 create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard),
@@ -90,6 +156,12 @@ credits. Never commit credentials to `.env` or source files: the desktop app
 stores the Last.fm and OpenAI keys locally with Windows DPAPI, and `.gitignore`
 excludes local credential, database, and log files.
 
+For hosted setup, the owner configures server-only values in the existing Vercel
+project; end users do not enter those keys. The required settings, exact callback,
+pilot access list, Preview database isolation and release gates are documented
+in [hosted setup](docs/hosted-setup.md). Never use a `VITE_` prefix for secrets,
+pull them into this repository or reuse the desktop's protected credential store.
+
 ## Build and test
 
 Build the visualizer and complete solution:
@@ -98,13 +170,36 @@ Build the visualizer and complete solution:
 .\Build.ps1 -Configuration Release
 ```
 
-Run every automated suite:
+Install the locked hosted dependencies separately when working on that lane:
+
+```powershell
+npm.cmd ci --ignore-scripts
+npm.cmd --prefix visualizer ci --ignore-scripts
+```
+
+Run the automated suites and hosted type check from the repository root:
 
 ```powershell
 dotnet test SpotifySynesthesia.sln --configuration Release --no-build --no-restore
-cd visualizer
-npm test
+npm.cmd --prefix visualizer test
+npm.cmd run test:cloud
+npm.cmd run typecheck:cloud
 ```
+
+Build the neutral hosted frontend separately from the desktop bundle:
+
+```powershell
+npm.cmd run build:hosted
+```
+
+The hosted build substitutes neutral public defaults without loading the private
+native profile, emits `visualizer/dist-hosted`, and disables source maps/public
+file copying. Do not publish the native `visualizer/dist` bundle as the hosted app.
+Seven real PostgreSQL cases intentionally skip unless an explicitly disposable
+local test database is supplied; see [hosted setup](docs/hosted-setup.md). Never
+point those tests at the application's database. Migrations are not run by builds.
+If the running desktop locks its executable, verify Release in a separate ignored
+output instead of force-closing the user's app.
 
 Run the diagnostic tone source:
 
@@ -123,7 +218,11 @@ The tone player defaults to 15% and is capped at 50%.
   real-time DSP, Spotify PKCE/current-playback services, Last.fm enrichment,
   SQLite SongProfiles, and the two independent localhost transports.
 - `visualizer` owns typed WebSocket reconnection, the `VisualContextEngine`, the
-  personal profile store, calibration UI, and the feedback-buffer WebGL painting.
+  personal profile store, calibration UI, feedback-buffer painting and optional
+  pooled Three.js spatial renderer.
+- `cloud` and `api` own server configuration, Spotify sessions, optional metadata
+  enrichment, durable caches/limits and request boundaries; `shared` holds their
+  normalized contracts. Cloud audio upload is not part of the design.
 - `tools/TestTonePlayer` emits controlled audio for capture and DSP verification.
 - `tools/ProcessCaptureProbe` reports live capture statistics for a target PID.
 - `profiles/synesthesia.json` contains the default user-controlled pitch mapping.
@@ -131,9 +230,16 @@ The tone player defaults to 15% and is capped at 50%.
   authorization, SQLite persistence, transport, and static frontend delivery.
 
 The real-time lane remains `Spotify PCM -> DSP -> AudioFrame -> /audio -> renderer`.
-The independent context lane is `Spotify Web API -> CurrentTrack -> TrackChanged
+The independent native context lane is `Spotify Web API -> CurrentTrack -> TrackChanged
 -> SongProfile -> /song-context -> diagnostics`. Context work never enters the
 capture callback or renderer mapping.
+
+The hosted context lane is `same-origin API -> authenticated metadata/cache ->
+validated CloudSongContext -> renderer context`. Its failure does not stop the
+local audio lane. Audio features drive waves, low-attack rain, harmonic-change
+glass and treble shimmer; Last.fm tags influence slower warmth, haze and texture,
+not instrument identification. Personal pitch colors remain the default; Mood
+mode and the bronze presentation are explicit choices, never destructive updates.
 
 ## Current status
 
@@ -165,6 +271,21 @@ slowly evolving field when Spotify is silent or enrichment is unavailable.
 
 ## Remaining roadmap
 
+The approved next release is a Vercel-hosted frontend with centrally configured
+optional services and a Windows companion for Spotify audio capture. The owner
+will configure shared API credentials on the server; end users will sign in and
+pair their companion rather than enter those keys. Existing local credentials
+remain untouched, and the bundled desktop renderer remains the offline fallback.
+A neutral protected frontend pilot is deployed. The centrally configured backend
+is still in development and has not been deployed.
+
+The visual direction adds a personal 3D theme inspired by “back to friends” by
+sombr: warm horizontal bronze waves, bass-driven raindrops against black, and
+falling translucent glass tiles. These are audio-feature-driven approximations,
+not isolated guitar/vocal detection. Personal pitch colors remain the default.
+See `docs/superpowers/plans/2026-10-07-hosted-synesthesia-rollout.md` for the
+implementation sequence and acceptance checks.
+
 1. A song-specific personal override editor (the normalized profile override
    contract already takes precedence without replacing generated analysis).
 2. Broader lyric-provider coverage, licensing review, and multi-song listening tests.
@@ -174,6 +295,19 @@ These services are optional enrichment. The local Spotify audio path remains the
 required fallback and must continue when every external service fails.
 
 ## Verification
+
+Fresh verification for the October 8 GitHub source checkpoint passed:
+
+- Frontend: 355 tests; cloud: 190 tests; audio engine: 364 tests; diagnostic tone
+  player: 17 tests — **926 passed** in total.
+- Seven real PostgreSQL integration cases skipped because no explicitly
+  disposable local database was supplied; they are not proven by mocked SQL.
+- Cloud type check, strict native/hosted frontend builds and complete Windows
+  Debug/Release builds passed. Both Windows builds reported zero warnings/errors.
+  Release was built/tested in a separate ignored output, preserving the open app.
+- The frontend bundle still has the existing size advisory. No tests/assertions
+  were removed. No new live audio, browser, GPU or personal-profile acceptance
+  was performed for this source publication.
 
 See `docs/mvp-verification.md` for measured results and remaining manual checks.
 The WebSocket contract is documented in `docs/audio-frame-protocol.md`.

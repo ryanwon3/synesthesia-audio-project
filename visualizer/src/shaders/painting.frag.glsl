@@ -14,6 +14,7 @@ uniform vec3 uLayerDynamics[3];
 uniform vec4 uLayerEffects[3];
 uniform vec3 uFragments;
 uniform vec4 uRipples[8];
+uniform float uRippleMotionScale;
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -85,7 +86,8 @@ void main() {
   float rings = 0.0;
   for (int ring = 0; ring < 8; ring++) {
     vec4 pulse = uRipples[ring];
-    float radius = pulse.z * 0.28;
+    // Age (pulse.z) is wall-clock; only expansion is slowed under reduced motion.
+    float radius = pulse.z * 0.28 * uRippleMotionScale;
     float distanceToRing = abs(length(centered - pulse.xy) - radius + (broad - 0.5) * 0.055);
     float thickness = mix(0.012, 0.047, uLayerDynamics[0].z);
     rings += exp(-distanceToRing * distanceToRing / (thickness * thickness)) * exp(-pulse.z * 0.65) * pulse.w;

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
+    "build:hosted": "tsc --noEmit && vite build --mode hosted",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"
   },
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/three": "0.185.4",
+    "happy-dom": "20.14.5",
     "typescript": "7.0.2",
     "vite": "8.2.1",
     "vitest": "4.1.10"

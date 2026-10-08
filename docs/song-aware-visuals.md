@@ -5,6 +5,22 @@ an edge-trigger/rearm gate; a sustained tone does not repeatedly spawn rings.
 Midrange and treble have independent energy, chroma, confidence, and attack.
 These are spectral bands, not separated instruments or vocal stems.
 
+## Local spatial prototype — October 8, 2026
+
+New source keeps roles distinct: sustained mids drive horizontal waves, low
+attacks drive rain, and confident harmonic changes/mid attacks drive falling
+translucent glass. Glass is a melodic approximation, not treble-as-melody or
+instrument separation. Generated context affects slow qualities, not families
+or impulses. Personal pitch colors stay default; explicit local bronze selection
+changes only wave tint and is never installed for all songs automatically.
+
+Painting remains production-selected. The new development preview uses a public
+synthetic palette without saved settings/services. The browser bridge failed
+before observation, so this scene has **not** been visually verified. September's
+inspection below refers to the earlier painting, not the 3D prototype. See
+[spatial verification](spatial-verification.md) for source evidence and pending
+calibration/motion/GPU/playback checks.
+
 The existing FFT supplies all three bands. The background service handles
 Spotify, Last.fm, LRCLIB, OpenAI, and SQLite. No external I/O is introduced into
 the capture/DSP callback. The renderer receives normalized layer colors,

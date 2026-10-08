@@ -4,6 +4,9 @@ import { calmVisualState, type RgbColor, type VisualState } from "./VisualState"
 import type { SongContextSnapshot } from "../song/SongContext";
 import { effects, songTraits } from "../song/SongVisualProfile";
 import { moodPitchColors } from "./MoodPalette";
+import { defaultSpatialPreferences, resolveSpatialTheme, type SpatialThemeId } from "../profiles/SpatialProfile";
+import { SpatialContextEngine } from "./SpatialContextEngine";
+import { neutralAtmosphere, tagAtmosphere } from "../song/SongAtmosphere";
 
 const chromaKeys = [
   "c",
@@ -27,17 +30,38 @@ export class VisualContextEngine {
   private targetPalettes: RgbColor[][] = [];
   private contextEnergy = 0.5;
   private contextTension = 0.3;
+  private readonly atmosphere = { ...neutralAtmosphere };
+  private personalSignature = "";
+  private personalColors: RgbColor[] = [];
+  private readonly spatialEngine = new SpatialContextEngine();
+  private readonly legacySpatialPreferences = defaultSpatialPreferences();
+  private spatialTrack: string | null | undefined;
 
   public get state(): VisualState {
     return this.current;
   }
 
-  public update(frame: AudioFrame, profile: SynesthesiaProfile, deltaSeconds: number, song?: SongContextSnapshot): VisualState {
+  public resetSpatialHistory(): void { this.spatialEngine.reset(); }
+
+  public update(frame: AudioFrame, profile: SynesthesiaProfile, deltaSeconds: number, song?: SongContextSnapshot,
+    manualTheme: SpatialThemeId | null = null, manualWaveColor: string | null = null): VisualState {
+    deltaSeconds = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
     const colors = selectColors(frame, profile);
+    const signature = pitchClasses.map(pitch => profile.pitchColors[pitch]).join("|");
+    if (this.personalSignature !== signature) {
+      this.personalSignature = signature;
+      this.personalColors = [colors.primary, colors.primary, colors.primary];
+    }
     const response = profile.response;
     const traits = songTraits(song);
     const influence = profile.layers?.moodInfluence ?? 0.8;
     const semanticFactor = 1 - Math.exp(-Math.max(0, deltaSeconds) / 1);
+    const atmosphereTarget = tagAtmosphere(song);
+    const atmosphereFactor = 1 - Math.exp(-deltaSeconds / 1.8);
+    for (const key of Object.keys(this.atmosphere) as (keyof typeof this.atmosphere)[]) {
+      const target = neutralAtmosphere[key] + (atmosphereTarget[key] - neutralAtmosphere[key]) * influence;
+      this.atmosphere[key] += (target - this.atmosphere[key]) * atmosphereFactor;
+    }
     this.contextEnergy += (traits.energy - this.contextEnergy) * semanticFactor;
     this.contextTension += (traits.tension - this.contextTension) * semanticFactor;
     if (this.paletteMood !== traits.mood) {
@@ -55,7 +79,10 @@ export class VisualContextEngine {
     const layers = this.current.layers.map((prior, index) => {
       const band = bands[index];
       const colorFrame = band ? { ...frame, chroma: band.chroma, chromaConfidence: band.chromaConfidence } : frame;
-      let color = band && band.chromaConfidence < 0.15 ? prior.color : selectColors(colorFrame, profile).primary;
+      let color = band && band.chromaConfidence < 0.15 ? this.personalColors[index] : selectColors(colorFrame, profile).primary;
+      // Remember only personal targets, never a Mood tint or an in-transition
+      // displayed color. Low-confidence bands can safely return to this palette.
+      if (profile.colorMode !== "mood" && (!band || band.chromaConfidence >= 0.15)) this.personalColors[index] = color;
       if (profile.colorMode === "mood") {
         const weights = chromaKeys.map(key => finite01(colorFrame.chroma[key]));
         const total = weights.reduce((a, b) => a + b, 0);
@@ -89,8 +116,8 @@ export class VisualContextEngine {
       sharpness: clamp01(response.sharpness * 0.55 + frame.spectralCentroid * 0.6 + this.contextTension * influence * 0.15),
       density: clamp01(0.18 + response.midStructure * 0.3 + frame.midEnergy * 0.7),
       depth: clamp01(response.depth * 0.8 + frame.stereoWidth * 0.3),
-      persistence: clamp01(0.68 + response.persistence * 0.29),
-      turbulence: clamp01(frame.spectralFlux * 0.72 + frame.bassEnergy * response.bassDeformation * 0.48),
+      persistence: clamp01(0.62 + response.persistence * 0.25 + this.atmosphere.haze * 0.12),
+      turbulence: clamp01(frame.spectralFlux * (0.55 + this.atmosphere.distortion * 0.65) + frame.bassEnergy * response.bassDeformation * 0.48),
       scale: clamp01(0.24 + frame.rms * 1.6 + frame.bassEnergy * response.bassDeformation * 0.7),
       particleDensity: clamp01(0.04 + frame.trebleEnergy * response.trebleParticles * 1.7),
       impulseStrength: clamp01(frame.onsetStrength * response.transientImpulse),
@@ -103,6 +130,14 @@ export class VisualContextEngine {
     const smoothingSeconds = 0.025 + response.smoothing * 0.2;
     const factor = 1 - Math.exp(-Math.max(deltaSeconds, 0) / smoothingSeconds);
     this.current = interpolateState(this.current, target, factor);
+    this.current.atmosphere = { ...this.atmosphere };
+    const track = song?.stale ? null : song?.currentTrack ?? null;
+    const trackKey = track?.spotifyTrackId ?? null;
+    if (this.spatialTrack !== undefined && this.spatialTrack !== trackKey) this.spatialEngine.reset();
+    this.spatialTrack = trackKey;
+    this.current.spatial = this.spatialEngine.update(frame, this.current,
+      profile.spatial ?? this.legacySpatialPreferences, resolveSpatialTheme(profile, track, manualTheme, manualWaveColor),
+      deltaSeconds);
     return this.current;
   }
 }
@@ -191,5 +226,5 @@ function finite01(value: number): number {
 }
 
 function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }

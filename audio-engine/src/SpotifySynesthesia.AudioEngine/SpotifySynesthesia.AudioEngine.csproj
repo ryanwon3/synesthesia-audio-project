@@ -8,4 +8,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SpotifySynesthesia.AudioEngine.Tests" />
+  </ItemGroup>
 </Project>

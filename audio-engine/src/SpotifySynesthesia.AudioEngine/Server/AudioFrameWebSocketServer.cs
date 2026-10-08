@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,14 +14,33 @@ namespace SpotifySynesthesia.AudioEngine.Server;
 
 public sealed class AudioFrameWebSocketServer : IAsyncDisposable
 {
+    private const int MaxAdmittedWebSockets = 32;
+    private const string AuthenticationCloseDescription = "Authentication failed";
+    private const WebSocketCloseStatus AuthenticationCloseStatus =
+        (WebSocketCloseStatus)CompanionConnectionProtocol.AuthenticationCloseCode;
+
+    private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan LeaseCheckInterval = TimeSpan.FromMilliseconds(250);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter() },
     };
 
+    // Connection-protocol numbers must be real JSON numbers; the web default would also accept quoted numbers.
+    private static readonly JsonSerializerOptions ConnectionJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        NumberHandling = JsonNumberHandling.Strict,
+    };
+
     private readonly AudioFrameWebSocketServerOptions _options;
-    private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
-    private readonly ConcurrentDictionary<Guid, SongContextClientSession> _songContextClients = new();
+    private readonly CompanionSessionManager _sessions;
+    private readonly ConcurrentDictionary<Guid, StreamClient<AudioFrame>> _clients = new();
+    private readonly ConcurrentDictionary<Guid, StreamClient<SongContextSnapshot>> _songContextClients = new();
+    private readonly ConcurrentDictionary<Task, byte> _handlers = new();
+    private readonly ConcurrentDictionary<WebSocket, byte> _openSockets = new();
     private readonly SemaphoreSlim _lifecycleGate = new(initialCount: 1, maxCount: 1);
 
     private HttpListener? _listener;
@@ -30,14 +51,20 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
     private Func<SpotifyAuthorizationCallback, CancellationToken, Task<SpotifyAuthorizationCallbackResult>>?
         _spotifyCallbackHandler;
     private long _framesPublished;
+    private int _admittedSockets;
     private bool _disposed;
 
-    public AudioFrameWebSocketServer(AudioFrameWebSocketServerOptions? options = null)
+    public AudioFrameWebSocketServer(
+        AudioFrameWebSocketServerOptions? options = null,
+        CompanionSessionManager? sessions = null)
     {
         _options = options ?? new AudioFrameWebSocketServerOptions();
+        _sessions = sessions ?? new(_options.OriginPolicy);
     }
 
     public AudioFrameWebSocketServerOptions Options => _options;
+
+    public CompanionSessionManager Sessions => _sessions;
 
     public bool IsRunning => _listener?.IsListening == true;
 
@@ -75,7 +102,7 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
             return;
         }
 
-        foreach (SongContextClientSession client in _songContextClients.Values)
+        foreach (StreamClient<SongContextSnapshot> client in _songContextClients.Values)
         {
             client.TryPublish(snapshot);
         }
@@ -127,7 +154,7 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
         }
 
         Interlocked.Increment(ref _framesPublished);
-        foreach (ClientSession client in _clients.Values)
+        foreach (StreamClient<AudioFrame> client in _clients.Values)
         {
             client.TryPublish(frame);
         }
@@ -184,7 +211,7 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
                     .GetContextAsync()
                     .WaitAsync(cancellationToken)
                     .ConfigureAwait(false);
-                _ = HandleContextAsync(context, cancellationToken);
+                TrackHandler(HandleContextAsync(context, cancellationToken));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -193,6 +220,18 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
         catch (HttpListenerException) when (cancellationToken.IsCancellationRequested || !listener.IsListening)
         {
         }
+    }
+
+    private void TrackHandler(Task handler)
+    {
+        // Stop waits on every in-flight request, including sockets that are still pending authentication.
+        _handlers.TryAdd(handler, 0);
+        _ = handler.ContinueWith(
+            static (completed, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(completed, out _),
+            _handlers,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task HandleContextAsync(HttpListenerContext context, CancellationToken cancellationToken)
@@ -213,10 +252,9 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
                 return;
             }
 
-            if (string.Equals(path, SongContextProtocol.Path, StringComparison.Ordinal) &&
-                context.Request.IsWebSocketRequest)
+            if (context.Request.IsWebSocketRequest && TryGetSocketEndpoint(path, out SocketEndpoint endpoint))
             {
-                await HandleSongContextClientAsync(context, cancellationToken).ConfigureAwait(false);
+                await HandleWebSocketRequestAsync(context, endpoint, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -225,29 +263,8 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
                 return;
             }
 
-            if (!string.Equals(path, _options.Path, StringComparison.Ordinal) || !context.Request.IsWebSocketRequest)
-            {
-                context.Response.StatusCode = (int)HttpStatusCode.NotFound;
-                context.Response.Close();
-                return;
-            }
-
-            HttpListenerWebSocketContext webSocketContext = await context
-                .AcceptWebSocketAsync(subProtocol: null)
-                .ConfigureAwait(false);
-            Guid clientId = Guid.NewGuid();
-            ClientSession client = new(webSocketContext.WebSocket, JsonOptions);
-            _clients[clientId] = client;
-
-            try
-            {
-                await client.RunAsync(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _clients.TryRemove(clientId, out _);
-                await client.DisposeAsync().ConfigureAwait(false);
-            }
+            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            context.Response.Close();
         }
         catch (Exception exception) when (
             exception is HttpListenerException or WebSocketException or OperationCanceledException or
@@ -290,54 +307,444 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
         context.Response.Close();
     }
 
-    private async Task HandleSongContextClientAsync(
+    private bool TryGetSocketEndpoint(string path, out SocketEndpoint endpoint)
+    {
+        if (string.Equals(path, SongContextProtocol.Path, StringComparison.Ordinal))
+        {
+            endpoint = SocketEndpoint.SongContext;
+            return true;
+        }
+
+        if (string.Equals(path, CompanionConnectionProtocol.PairingPath, StringComparison.Ordinal))
+        {
+            endpoint = SocketEndpoint.Pairing;
+            return true;
+        }
+
+        endpoint = SocketEndpoint.Audio;
+        return string.Equals(path, _options.Path, StringComparison.Ordinal);
+    }
+
+    private async Task HandleWebSocketRequestAsync(
         HttpListenerContext context,
+        SocketEndpoint endpoint,
         CancellationToken cancellationToken)
     {
-        if (!IsAllowedSongContextOrigin(context.Request.Headers["Origin"]))
+        // Denied upgrades are refused before any socket, session, or rate-limit state is allocated.
+        if (!TryAuthorizeUpgrade(context.Request, endpoint, out string? origin))
         {
-            context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
-            context.Response.Close();
+            RejectUpgrade(context.Response, HttpStatusCode.Forbidden);
             return;
         }
 
-        HttpListenerWebSocketContext webSocketContext = await context
-            .AcceptWebSocketAsync(subProtocol: null)
-            .ConfigureAwait(false);
-        Guid clientId = Guid.NewGuid();
-        SongContextClientSession client = new(
-            webSocketContext.WebSocket,
-            command => HandleSongContextCommandAsync(command, cancellationToken));
-        _songContextClients[clientId] = client;
-        SongContextSnapshot? latest = Volatile.Read(ref _latestSongContext);
-        if (latest is not null)
+        if (Interlocked.Increment(ref _admittedSockets) > MaxAdmittedWebSockets)
         {
-            client.TryPublish(latest);
+            Interlocked.Decrement(ref _admittedSockets);
+            RejectUpgrade(context.Response, HttpStatusCode.TooManyRequests);
+            return;
         }
 
+        WebSocket? socket = null;
         try
         {
+            HttpListenerWebSocketContext webSocketContext = await context
+                .AcceptWebSocketAsync(subProtocol: null)
+                .ConfigureAwait(false);
+            long acceptedTimestamp = Stopwatch.GetTimestamp();
+            socket = webSocketContext.WebSocket;
+            _openSockets[socket] = 0;
+
+            if (origin is null)
+            {
+                await RunStreamAsync(socket, endpoint, sessionId: null, cancellationToken).ConfigureAwait(false);
+            }
+            else if (endpoint == SocketEndpoint.Pairing)
+            {
+                await HandlePairingAsync(socket, origin, acceptedTimestamp, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await RunAuthenticatedStreamAsync(socket, endpoint, origin, acceptedTimestamp, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (socket is not null)
+            {
+                _openSockets.TryRemove(socket, out _);
+                socket.Dispose();
+            }
+
+            Interlocked.Decrement(ref _admittedSockets);
+        }
+    }
+
+    // The origin comes only from the upgrade header. A null origin means an admitted native diagnostic client.
+    private bool TryAuthorizeUpgrade(HttpListenerRequest request, SocketEndpoint endpoint, out string? origin)
+    {
+        origin = null;
+        if (!string.IsNullOrEmpty(request.Url?.Query))
+        {
+            return false;
+        }
+
+        if (request.Headers["Origin"] is null)
+        {
+            return endpoint != SocketEndpoint.Pairing &&
+                _options.NativeDiagnostics == NativeDiagnosticPolicy.AllowUnauthenticatedLoopbackDiagnostics &&
+                IsLoopbackPeer(request.RemoteEndPoint);
+        }
+
+        string[]? origins = request.Headers.GetValues("Origin");
+        if (origins is not [string single] || !_options.OriginPolicy.IsAllowed(single))
+        {
+            return false;
+        }
+
+        origin = single;
+        return true;
+    }
+
+    private static bool IsLoopbackPeer(IPEndPoint? remote)
+    {
+        if (remote is null)
+        {
+            return false;
+        }
+
+        IPAddress address = remote.Address.IsIPv4MappedToIPv6 ? remote.Address.MapToIPv4() : remote.Address;
+        return IPAddress.IsLoopback(address);
+    }
+
+    private static void RejectUpgrade(HttpListenerResponse response, HttpStatusCode status)
+    {
+        response.StatusCode = (int)status;
+        response.Close();
+    }
+
+    private async Task HandlePairingAsync(
+        WebSocket socket,
+        string origin,
+        long acceptedTimestamp,
+        CancellationToken cancellationToken)
+    {
+        (CompanionConnectionRequest? request, Task pendingRead) = await ReceiveInitialRequestAsync(
+            socket,
+            acceptedTimestamp,
+            cancellationToken).ConfigureAwait(false);
+        CompanionConnectionResponse? response = request is null || cancellationToken.IsCancellationRequested
+            ? null
+            : ExecutePairingRequest(request, origin);
+        if (response is null)
+        {
+            await FailAuthenticationAsync(socket, pendingRead).ConfigureAwait(false);
+            return;
+        }
+
+        if (await SendControlAsync(socket, response).ConfigureAwait(false))
+        {
+            await CloseOutputBoundedAsync(socket, WebSocketCloseStatus.NormalClosure, "Done").ConfigureAwait(false);
+            await AwaitPeerCloseAsync(socket, pendingRead).ConfigureAwait(false);
+        }
+    }
+
+    private CompanionConnectionResponse? ExecutePairingRequest(CompanionConnectionRequest request, string origin) =>
+        request switch
+        {
+            { Type: CompanionConnectionProtocol.PairMessageType, Code: { } code, Token: null } =>
+                _sessions.TryPair(code, origin, out CompanionCredential? paired) && paired is not null
+                    ? CreateCredentialResponse(CompanionConnectionProtocol.PairedMessageType, paired)
+                    : null,
+            { Type: CompanionConnectionProtocol.RenewMessageType, Code: null, Token: { } token } =>
+                _sessions.Renew(token, origin) is { } renewed
+                    ? CreateCredentialResponse(CompanionConnectionProtocol.RenewedMessageType, renewed)
+                    : null,
+            { Type: CompanionConnectionProtocol.DisconnectMessageType, Code: null, Token: { } token } =>
+                _sessions.Revoke(token, origin)
+                    ? new CompanionConnectionResponse { Type = CompanionConnectionProtocol.DisconnectedMessageType }
+                    : null,
+            _ => null,
+        };
+
+    private static CompanionConnectionResponse CreateCredentialResponse(string type, CompanionCredential credential) =>
+        new()
+        {
+            Type = type,
+            Token = credential.Token,
+            ExpiresAtUtc = credential.ExpiresAtUtc,
+        };
+
+    private async Task RunAuthenticatedStreamAsync(
+        WebSocket socket,
+        SocketEndpoint endpoint,
+        string origin,
+        long acceptedTimestamp,
+        CancellationToken cancellationToken)
+    {
+        (CompanionConnectionRequest? request, Task pendingRead) = await ReceiveInitialRequestAsync(
+            socket,
+            acceptedTimestamp,
+            cancellationToken).ConfigureAwait(false);
+        if (request is not { Type: CompanionConnectionProtocol.AuthenticateMessageType, Code: null, Token: { } token } ||
+            !_sessions.TryAuthenticate(token, origin, out Guid sessionId) ||
+            !_sessions.TryGetSessionLease(sessionId, out DateTimeOffset expiresAtUtc) ||
+            cancellationToken.IsCancellationRequested)
+        {
+            await FailAuthenticationAsync(socket, pendingRead).ConfigureAwait(false);
+            return;
+        }
+
+        // The acknowledgement carries only the expiry and is sent before registration, so it precedes any payload.
+        CompanionConnectionResponse acknowledgement = new()
+        {
+            Type = CompanionConnectionProtocol.AuthenticatedMessageType,
+            ExpiresAtUtc = expiresAtUtc,
+        };
+        if (await SendControlAsync(socket, acknowledgement).ConfigureAwait(false))
+        {
+            await RunStreamAsync(socket, endpoint, sessionId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private Task RunStreamAsync(
+        WebSocket socket,
+        SocketEndpoint endpoint,
+        Guid? sessionId,
+        CancellationToken cancellationToken) =>
+        endpoint == SocketEndpoint.Audio
+            ? RunAudioClientAsync(socket, sessionId, cancellationToken)
+            : RunSongContextClientAsync(socket, sessionId, cancellationToken);
+
+    private async Task RunAudioClientAsync(WebSocket socket, Guid? sessionId, CancellationToken cancellationToken)
+    {
+        using StreamClient<AudioFrame> client = new(
+            socket,
+            capacity: 2,
+            SerializeAudioFrame,
+            commandHandler: null,
+            sessionId,
+            _sessions);
+        await RunRegisteredAsync(_clients, client, static () => null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RunSongContextClientAsync(WebSocket socket, Guid? sessionId, CancellationToken cancellationToken)
+    {
+        using StreamClient<SongContextSnapshot> client = new(
+            socket,
+            capacity: 1,
+            SerializeSongContext,
+            command => HandleSongContextCommandAsync(command, cancellationToken),
+            sessionId,
+            _sessions);
+        await RunRegisteredAsync(
+            _songContextClients,
+            client,
+            () => Volatile.Read(ref _latestSongContext),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task RunRegisteredAsync<T>(
+        ConcurrentDictionary<Guid, StreamClient<T>> registry,
+        StreamClient<T> client,
+        Func<T?> readReplay,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        Guid clientId = Guid.NewGuid();
+        registry[clientId] = client;
+        try
+        {
+            // Read the replay only after registering so a concurrent publication is never lost.
+            if (readReplay() is { } replay)
+            {
+                client.TryPublish(replay);
+            }
+
             await client.RunAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _songContextClients.TryRemove(clientId, out _);
-            await client.DisposeAsync().ConfigureAwait(false);
+            registry.TryRemove(clientId, out _);
         }
     }
 
-    private bool IsAllowedSongContextOrigin(string? origin)
+    private static byte[] SerializeAudioFrame(AudioFrame frame) =>
+        JsonSerializer.SerializeToUtf8Bytes(AudioFrameMessage.Create(frame), JsonOptions);
+
+    private static byte[] SerializeSongContext(SongContextSnapshot snapshot) =>
+        JsonSerializer.SerializeToUtf8Bytes(SongContextMessage.Create(snapshot), SongContextJson.Options);
+
+    // The deadline races the read instead of cancelling it, because a cancelled receive aborts the socket
+    // and would prevent the 4401 close from being sent.
+    private static async Task<(CompanionConnectionRequest? Request, Task PendingRead)> ReceiveInitialRequestAsync(
+        WebSocket socket,
+        long acceptedTimestamp,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(origin))
+        byte[] buffer = new byte[CompanionConnectionProtocol.MaxInitialMessageBytes + 1];
+        Task<int> read = ReadInitialMessageAsync(socket, buffer);
+        int count = -1;
+        TimeSpan remaining =
+            CompanionConnectionProtocol.InitialAuthenticationTimeout - Stopwatch.GetElapsedTime(acceptedTimestamp);
+        if (remaining > TimeSpan.Zero)
         {
+            try
+            {
+                count = await read.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
+            {
+            }
+        }
+
+        if (count <= 0)
+        {
+            return (null, read);
+        }
+
+        try
+        {
+            return (ParseRequest(buffer.AsSpan(0, count)), read);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+        }
+    }
+
+    // Returns the byte count of one complete text message within the limit, or -1 for any other outcome.
+    private static async Task<int> ReadInitialMessageAsync(WebSocket socket, byte[] buffer)
+    {
+        int count = 0;
+        try
+        {
+            while (true)
+            {
+                ValueWebSocketReceiveResult result = await socket
+                    .ReceiveAsync(buffer.AsMemory(count), CancellationToken.None)
+                    .ConfigureAwait(false);
+                count += result.Count;
+                if (result.MessageType != WebSocketMessageType.Text ||
+                    count > CompanionConnectionProtocol.MaxInitialMessageBytes)
+                {
+                    return -1;
+                }
+
+                if (result.EndOfMessage)
+                {
+                    return count;
+                }
+            }
+        }
+        catch (Exception exception) when (IsSocketTermination(exception))
+        {
+            return -1;
+        }
+    }
+
+    private static CompanionConnectionRequest? ParseRequest(ReadOnlySpan<byte> utf8)
+    {
+        try
+        {
+            CompanionConnectionRequest? request =
+                JsonSerializer.Deserialize<CompanionConnectionRequest>(utf8, ConnectionJsonOptions);
+            return request is { ProtocolVersion: CompanionConnectionProtocol.CurrentVersion } ? request : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task FailAuthenticationAsync(WebSocket socket, Task pendingRead)
+    {
+        // Deliberately generic: no reason, request echo, or secret is ever returned to the peer.
+        await SendControlAsync(
+            socket,
+            new CompanionConnectionResponse { Type = CompanionConnectionProtocol.AuthenticationFailedMessageType })
+            .ConfigureAwait(false);
+        await CloseOutputBoundedAsync(socket, AuthenticationCloseStatus, AuthenticationCloseDescription)
+            .ConfigureAwait(false);
+        await AwaitPeerCloseAsync(socket, pendingRead).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> SendControlAsync(WebSocket socket, CompanionConnectionResponse response)
+    {
+        if (socket.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+        {
+            return false;
+        }
+
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(response, ConnectionJsonOptions);
+        using CancellationTokenSource timeout = new(CloseTimeout);
+        try
+        {
+            await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, timeout.Token)
+                .ConfigureAwait(false);
             return true;
         }
-
-        return Uri.TryCreate(origin, UriKind.Absolute, out Uri? uri) &&
-            string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal) &&
-            uri.Port == _options.Port;
+        catch (Exception exception) when (IsSocketTermination(exception))
+        {
+            socket.Abort();
+            return false;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
     }
+
+    private static async Task CloseOutputBoundedAsync(
+        WebSocket socket,
+        WebSocketCloseStatus status,
+        string description)
+    {
+        if (socket.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+        {
+            return;
+        }
+
+        using CancellationTokenSource timeout = new(CloseTimeout);
+        try
+        {
+            await socket.CloseOutputAsync(status, description, timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsSocketTermination(exception))
+        {
+            socket.Abort();
+        }
+    }
+
+    // Drains briefly until the peer acknowledges the close so unread input does not turn the close into a reset.
+    private static async Task AwaitPeerCloseAsync(WebSocket socket, Task pendingRead)
+    {
+        using CancellationTokenSource timeout = new(CloseTimeout);
+        try
+        {
+            await pendingRead.WaitAsync(timeout.Token).ConfigureAwait(false);
+            byte[] discard = new byte[256];
+            while (socket.State == WebSocketState.CloseSent)
+            {
+                _ = await socket.ReceiveAsync(discard.AsMemory(), timeout.Token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (IsSocketTermination(exception))
+        {
+            socket.Abort();
+        }
+    }
+
+    private static string DescribeClose(WebSocketCloseStatus status) => status switch
+    {
+        AuthenticationCloseStatus => AuthenticationCloseDescription,
+        WebSocketCloseStatus.MessageTooBig => "Command is too large",
+        _ => "Connection closed",
+    };
+
+    private static bool IsSocketTermination(Exception exception) =>
+        exception is WebSocketException or OperationCanceledException or ObjectDisposedException or
+            TimeoutException or HttpListenerException;
 
     private async Task HandleSongContextCommandAsync(
         SongContextCommand command,
@@ -442,322 +849,321 @@ public sealed class AudioFrameWebSocketServer : IAsyncDisposable
             return;
         }
 
+        // Cancelling first asks live streams to close and fails pending authentication; a restart revokes every session.
         serverCancellation?.Cancel();
+        _sessions.RevokeAll();
         listener.Stop();
 
-        foreach (ClientSession client in _clients.Values)
+        try
         {
-            client.RequestStop();
-        }
+            if (acceptTask is not null)
+            {
+                await acceptTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-        foreach (SongContextClientSession client in _songContextClients.Values)
+            await WaitForHandlersAsync(ShutdownTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        finally
         {
-            client.RequestStop();
+            // Anything still open after the graceful window is aborted so an unresponsive peer cannot hold Stop.
+            AbortOpenSockets();
+            await WaitForHandlersAsync(CloseTimeout, CancellationToken.None).ConfigureAwait(false);
+            _clients.Clear();
+            _songContextClients.Clear();
+            listener.Close();
+            serverCancellation?.Dispose();
+            _listener = null;
+            _serverCancellation = null;
+            _acceptTask = null;
         }
-
-        if (acceptTask is not null)
-        {
-            await acceptTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        ClientSession[] remainingClients = _clients.Values.ToArray();
-        foreach (ClientSession client in remainingClients)
-        {
-            await client.DisposeAsync().ConfigureAwait(false);
-        }
-
-        SongContextClientSession[] remainingSongClients = _songContextClients.Values.ToArray();
-        foreach (SongContextClientSession client in remainingSongClients)
-        {
-            await client.DisposeAsync().ConfigureAwait(false);
-        }
-
-        _clients.Clear();
-        _songContextClients.Clear();
-        listener.Close();
-        serverCancellation?.Dispose();
-        _listener = null;
-        _serverCancellation = null;
-        _acceptTask = null;
     }
 
-    private sealed class SongContextClientSession : IAsyncDisposable
+    private async Task WaitForHandlersAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        private const int MaximumCommandBytes = 8 * 1024;
-        private readonly WebSocket _webSocket;
-        private readonly Func<SongContextCommand, Task> _commandHandler;
-        private readonly Channel<SongContextSnapshot> _snapshots = Channel.CreateBounded<SongContextSnapshot>(
-            new BoundedChannelOptions(capacity: 1)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            });
-        private readonly CancellationTokenSource _sessionCancellation = new();
-        private int _disposed;
-
-        public SongContextClientSession(WebSocket webSocket, Func<SongContextCommand, Task> commandHandler)
+        Task[] handlers = [.. _handlers.Keys];
+        if (handlers.Length > 0)
         {
-            _webSocket = webSocket;
-            _commandHandler = commandHandler;
+            // WhenAny never rethrows, so a slow or faulted handler cannot leave teardown half done.
+            await Task.WhenAny(Task.WhenAll(handlers), Task.Delay(timeout, cancellationToken)).ConfigureAwait(false);
         }
 
-        public bool TryPublish(SongContextSnapshot snapshot) => _snapshots.Writer.TryWrite(snapshot);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
 
-        public void RequestStop()
+    private void AbortOpenSockets()
+    {
+        foreach (StreamClient<AudioFrame> client in _clients.Values)
         {
-            _snapshots.Writer.TryComplete();
+            client.Abort();
+        }
+
+        foreach (StreamClient<SongContextSnapshot> client in _songContextClients.Values)
+        {
+            client.Abort();
+        }
+
+        foreach (WebSocket socket in _openSockets.Keys)
+        {
             try
             {
-                _sessionCancellation.Cancel();
+                socket.Abort();
             }
             catch (ObjectDisposedException)
             {
-                // A disconnected client can finish disposal while server shutdown
-                // is iterating the concurrent session collection. Stop is idempotent.
+                // The owning handler finished disposal while shutdown was iterating.
+            }
+        }
+    }
+
+    private enum SocketEndpoint
+    {
+        Audio,
+        SongContext,
+        Pairing,
+    }
+
+    // The send loop is the only writer after admission: lease loss, peer close, and shutdown all complete the
+    // channel, and the close frame is sent only after the send loop has stopped. Each payload send has its own
+    // deadline; a peer that stops reading has its transport aborted rather than holding the writer and its admission.
+    internal sealed class StreamClient<T> : IDisposable
+        where T : class
+    {
+        private const int MaximumCommandBytes = 8 * 1024;
+        private readonly WebSocket _webSocket;
+        private readonly Func<T, byte[]> _serialize;
+        private readonly Func<SongContextCommand, Task>? _commandHandler;
+        private readonly Guid? _sessionId;
+        private readonly CompanionSessionManager _sessions;
+        private readonly Channel<T> _messages;
+        private readonly CancellationTokenSource _abort = new();
+        private int _closeStatus;
+
+        public StreamClient(
+            WebSocket webSocket,
+            int capacity,
+            Func<T, byte[]> serialize,
+            Func<SongContextCommand, Task>? commandHandler,
+            Guid? sessionId,
+            CompanionSessionManager sessions)
+        {
+            _webSocket = webSocket;
+            _serialize = serialize;
+            _commandHandler = commandHandler;
+            _sessionId = sessionId;
+            _sessions = sessions;
+            _messages = Channel.CreateBounded<T>(
+                new BoundedChannelOptions(capacity)
+                {
+                    FullMode = BoundedChannelFullMode.DropOldest,
+                    SingleReader = true,
+                    SingleWriter = false,
+                });
+        }
+
+        // Called by capture and context publishers: a channel write only, never a lease check or I/O.
+        public bool TryPublish(T message) => _messages.Writer.TryWrite(message);
+
+        public void RequestStop() => Finish(WebSocketCloseStatus.NormalClosure);
+
+        public void Abort()
+        {
+            RequestStop();
+            try
+            {
+                _abort.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A disconnected client can finish disposal while server shutdown is iterating.
             }
         }
 
         public async Task RunAsync(CancellationToken serverCancellation)
         {
-            using CancellationTokenSource linkedCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(serverCancellation, _sessionCancellation.Token);
-            Task sendTask = SendLoopAsync(linkedCancellation.Token);
-            Task receiveTask = ReceiveLoopAsync(linkedCancellation.Token);
-            await Task.WhenAny(sendTask, receiveTask).ConfigureAwait(false);
-            linkedCancellation.Cancel();
-
+            // Registering on an already cancelled token runs immediately, so a late registration cannot outlive Stop.
+            using CancellationTokenRegistration stopRegistration = serverCancellation.UnsafeRegister(
+                static state => ((StreamClient<T>)state!).RequestStop(),
+                this);
+            CancellationToken abort = _abort.Token;
+            Task receiveTask = ReceiveLoopAsync(abort);
+            Task watchTask = _sessionId is null ? Task.CompletedTask : WatchLeaseAsync(abort);
             try
             {
-                await Task.WhenAll(sendTask, receiveTask).ConfigureAwait(false);
+                await SendLoopAsync(abort).ConfigureAwait(false);
+                Finish(WebSocketCloseStatus.NormalClosure);
+                WebSocketCloseStatus status = (WebSocketCloseStatus)Volatile.Read(ref _closeStatus);
+                await CloseOutputBoundedAsync(_webSocket, status, DescribeClose(status)).ConfigureAwait(false);
+                await Task.WhenAny(receiveTask, Task.Delay(CloseTimeout, abort)).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
+            finally
             {
-            }
-            catch (WebSocketException)
-            {
+                Finish(WebSocketCloseStatus.NormalClosure);
+                _abort.Cancel();
+                await receiveTask.ConfigureAwait(false);
+                await watchTask.ConfigureAwait(false);
             }
         }
 
-        public async ValueTask DisposeAsync()
+        public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            {
-                return;
-            }
-
-            RequestStop();
-            if (_webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-            {
-                try
-                {
-                    await _webSocket.CloseOutputAsync(
-                        WebSocketCloseStatus.NormalClosure,
-                        "Server stopped",
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (WebSocketException)
-                {
-                }
-            }
-
             _webSocket.Dispose();
-            _sessionCancellation.Dispose();
+            _abort.Dispose();
         }
+
+        private void Finish(WebSocketCloseStatus status)
+        {
+            Interlocked.CompareExchange(ref _closeStatus, (int)status, 0);
+            _messages.Writer.TryComplete();
+        }
+
+        private bool HasLease() =>
+            _sessionId is not { } sessionId || _sessions.TryGetSessionLease(sessionId, out _);
 
         private async Task SendLoopAsync(CancellationToken cancellationToken)
         {
-            await foreach (SongContextSnapshot first in _snapshots.Reader
-                .ReadAllAsync(cancellationToken)
-                .ConfigureAwait(false))
+            ChannelReader<T> reader = _messages.Reader;
+            try
             {
-                SongContextSnapshot latest = first;
-                while (_snapshots.Reader.TryRead(out SongContextSnapshot? newer))
+                while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    latest = newer;
-                }
+                    T? latest = null;
+                    while (reader.TryRead(out T? newer))
+                    {
+                        latest = newer;
+                    }
 
-                byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
-                    SongContextMessage.Create(latest),
-                    SongContextJson.Options);
-                await _webSocket.SendAsync(
-                    payload,
-                    WebSocketMessageType.Text,
-                    endOfMessage: true,
-                    cancellationToken).ConfigureAwait(false);
+                    // Close, revocation, and expiry win over queued publications, which are dropped rather than sent.
+                    if (latest is null || Volatile.Read(ref _closeStatus) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (!HasLease())
+                    {
+                        Finish(AuthenticationCloseStatus);
+                        return;
+                    }
+
+                    byte[] payload = _serialize(latest);
+                    using CancellationTokenSource deadline =
+                        CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    deadline.CancelAfter(SendTimeout);
+                    try
+                    {
+                        await _webSocket
+                            .SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, deadline.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (
+                        deadline.IsCancellationRequested &&
+                        !cancellationToken.IsCancellationRequested &&
+                        IsSocketTermination(exception))
+                    {
+                        // A missed deadline ends the transport, not the session; the stalled peer could not read a close.
+                        _webSocket.Abort();
+                        return;
+                    }
+                }
+            }
+            catch (Exception exception) when (IsSocketTermination(exception))
+            {
             }
         }
 
         private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
         {
             byte[] buffer = new byte[2048];
-            while (!cancellationToken.IsCancellationRequested && _webSocket.State == WebSocketState.Open)
-            {
-                using MemoryStream message = new();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _webSocket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        return;
-                    }
-
-                    if (message.Length + result.Count > MaximumCommandBytes)
-                    {
-                        await _webSocket.CloseOutputAsync(
-                            WebSocketCloseStatus.MessageTooBig,
-                            "Command is too large",
-                            cancellationToken).ConfigureAwait(false);
-                        return;
-                    }
-
-                    message.Write(buffer, 0, result.Count);
-                }
-                while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    SongContextCommand? command = JsonSerializer.Deserialize<SongContextCommand>(
-                        message.GetBuffer().AsSpan(0, checked((int)message.Length)),
-                        SongContextJson.Options);
-                    if (command is not null)
-                    {
-                        await _commandHandler(command).ConfigureAwait(false);
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Ignore malformed local commands and keep the diagnostics connection alive.
-                }
-            }
-        }
-    }
-
-    private sealed class ClientSession : IAsyncDisposable
-    {
-        private readonly WebSocket _webSocket;
-        private readonly JsonSerializerOptions _jsonOptions;
-        private readonly Channel<AudioFrame> _frames = Channel.CreateBounded<AudioFrame>(
-            new BoundedChannelOptions(capacity: 2)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            });
-        private readonly CancellationTokenSource _sessionCancellation = new();
-        private int _disposed;
-
-        public ClientSession(WebSocket webSocket, JsonSerializerOptions jsonOptions)
-        {
-            _webSocket = webSocket;
-            _jsonOptions = jsonOptions;
-        }
-
-        public bool TryPublish(AudioFrame frame) => _frames.Writer.TryWrite(frame);
-
-        public void RequestStop()
-        {
-            _frames.Writer.TryComplete();
+            using MemoryStream message = new();
             try
             {
-                _sessionCancellation.Cancel();
+                // Keep reading after a close is sent so the peer's close reply is observed rather than reset.
+                while (_webSocket.State is WebSocketState.Open or WebSocketState.CloseSent)
+                {
+                    message.SetLength(0);
+                    ValueWebSocketReceiveResult result;
+                    do
+                    {
+                        result = await _webSocket.ReceiveAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            return;
+                        }
+
+                        if (_commandHandler is not null)
+                        {
+                            if (message.Length + result.Count > MaximumCommandBytes)
+                            {
+                                Finish(WebSocketCloseStatus.MessageTooBig);
+                                return;
+                            }
+
+                            message.Write(buffer, 0, result.Count);
+                        }
+                    }
+                    while (!result.EndOfMessage);
+
+                    if (_commandHandler is { } handler && result.MessageType == WebSocketMessageType.Text)
+                    {
+                        await DispatchCommandAsync(handler, message).ConfigureAwait(false);
+                    }
+                }
             }
-            catch (ObjectDisposedException)
+            catch (Exception exception) when (IsSocketTermination(exception))
             {
-                // A disconnected client can finish disposal while server shutdown
-                // is iterating the concurrent session collection. Stop is idempotent.
+            }
+            finally
+            {
+                Finish(WebSocketCloseStatus.NormalClosure);
             }
         }
 
-        public async Task RunAsync(CancellationToken serverCancellation)
+        private async Task DispatchCommandAsync(Func<SongContextCommand, Task> handler, MemoryStream message)
         {
-            using CancellationTokenSource linkedCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(serverCancellation, _sessionCancellation.Token);
-            Task sendTask = SendLoopAsync(linkedCancellation.Token);
-            Task receiveTask = ReceiveLoopAsync(linkedCancellation.Token);
-            await Task.WhenAny(sendTask, receiveTask).ConfigureAwait(false);
-            linkedCancellation.Cancel();
-
-            try
-            {
-                await Task.WhenAll(sendTask, receiveTask).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
-            {
-            }
-            catch (WebSocketException)
-            {
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            // Commands after a close, revocation, or expiry never reach the handler.
+            if (Volatile.Read(ref _closeStatus) != 0)
             {
                 return;
             }
 
-            RequestStop();
-
-            if (_webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            if (!HasLease())
             {
-                try
-                {
-                    await _webSocket
-                        .CloseOutputAsync(
-                            WebSocketCloseStatus.NormalClosure,
-                            "Server stopped",
-                            CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch (WebSocketException)
-                {
-                }
+                Finish(AuthenticationCloseStatus);
+                return;
             }
 
-            _webSocket.Dispose();
-            _sessionCancellation.Dispose();
-        }
-
-        private async Task SendLoopAsync(CancellationToken cancellationToken)
-        {
-            await foreach (AudioFrame firstFrame in _frames.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            try
             {
-                AudioFrame latestFrame = firstFrame;
-                while (_frames.Reader.TryRead(out AudioFrame? newerFrame))
+                SongContextCommand? command = JsonSerializer.Deserialize<SongContextCommand>(
+                    message.GetBuffer().AsSpan(0, checked((int)message.Length)),
+                    SongContextJson.Options);
+                if (command is not null)
                 {
-                    latestFrame = newerFrame;
+                    await handler(command).ConfigureAwait(false);
                 }
-
-                byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
-                    AudioFrameMessage.Create(latestFrame),
-                    _jsonOptions);
-                await _webSocket
-                    .SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken)
-                    .ConfigureAwait(false);
+            }
+            catch (JsonException)
+            {
+                // Ignore malformed local commands and keep the connection alive.
             }
         }
 
-        private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
+        private async Task WatchLeaseAsync(CancellationToken cancellationToken)
         {
-            byte[] buffer = new byte[256];
-
-            while (!cancellationToken.IsCancellationRequested && _webSocket.State == WebSocketState.Open)
+            using PeriodicTimer timer = new(LeaseCheckInterval);
+            try
             {
-                WebSocketReceiveResult result = await _webSocket
-                    .ReceiveAsync(buffer, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (result.MessageType == WebSocketMessageType.Close)
+                // Idle sockets have no publication to trigger the send-side check, so revocation is polled too.
+                while (Volatile.Read(ref _closeStatus) == 0 &&
+                    await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    return;
+                    if (!HasLease())
+                    {
+                        Finish(AuthenticationCloseStatus);
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
             }
         }
     }

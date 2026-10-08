@@ -11,12 +11,13 @@
     <header class="app-bar">
       <div class="identity">
         <span class="wordmark">Spotify Synesthesia</span>
-        <span id="connection-status" class="connection-status" data-state="connecting">
+        <span id="connection-status" class="connection-status" data-state="disconnected">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="connection-label">Finding audio</span>
+          <span id="connection-label">Connect Windows companion</span>
         </span>
       </div>
       <nav class="tools" aria-label="Visualizer controls">
+        <button id="companion-connect" class="text-button" type="button" data-state="unpaired">Connect Windows companion</button>
         <button id="spotify-connect" class="icon-button spotify-connect" type="button" aria-label="Connect Spotify" title="Connect Spotify">
           <i data-lucide="link" aria-hidden="true"></i>
         </button>
@@ -46,6 +47,25 @@
         <p id="spotify-form-status" class="form-status" aria-live="polite"></p>
         <footer>
           <button class="command-button" type="submit"><i data-lucide="link" aria-hidden="true"></i>Save and connect</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="companion-dialog" class="spotify-dialog">
+      <form method="dialog">
+        <header>
+          <div><span class="panel-kicker">WINDOWS COMPANION</span><h1>Connect Windows companion</h1></div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="Close companion setup" title="Close">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </header>
+        <p class="companion-state" data-companion-status aria-live="polite">Not connected</p>
+        <p class="companion-help">In the Spotify Synesthesia Windows app, select New pairing code, then Copy code, and paste it here. Each code works once and expires after five minutes.</p>
+        <label for="companion-code">Pairing code</label>
+        <input id="companion-code" data-companion-code type="text" maxlength="22" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+        <p class="form-status" data-companion-message aria-live="polite"></p>
+        <footer>
+          <button class="command-button" type="button" data-companion-disconnect>Disconnect</button>
+          <button class="command-button" type="submit" data-companion-submit>Connect</button>
         </footer>
       </form>
     </dialog>
